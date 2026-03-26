@@ -42,7 +42,8 @@ Uses `node-forge` for all PKI operations:
 1. On first run: generate a CA keypair (RSA 2048), store at `~/.config/mitm-proxy/ca.pem` / `ca-key.pem` with `0600` permissions.
 2. Per-connection (HTTPS MITM): generate a leaf cert signed by the CA for the target hostname, with SANs covering the host. Cache signed leaf certs in-memory (key: `hostname`) to avoid re-signing for repeated connections.
 3. Leaf cert validity: 24 hours. Cache uses **lazy TTL checking**: on each access, if entry age > 24h, the entry is invalidated and a new cert is generated. A background timer runs every hour to purge expired entries to bound memory.
-4. Max cache size: 500 entries. LRU eviction if limit exceeded. (This is a future enhancement; MVP uses unbounded cache with lazy TTL.)
+4. **MVP:** unbounded in-memory cache with lazy TTL (regenerate on access if > 24h old).
+   **Post-MVP:** max 500 entries with LRU eviction + hourly background purge.
 
 ### HTTPS MITM Pipeline (explicit proxy)
 
@@ -152,7 +153,7 @@ Log file default: `~/.config/mitm-proxy/traffic.jsonl`. Configurable via `--log-
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- **Top bar**: Proxy status, bind address, total request count, error count, latency p50.
+- **Top bar**: Proxy status, bind address, total request count, error count, latency p50 / p95.
 - **Request list**: Scrollable table with Method | Path | Status | Duration. Newest at bottom. Failed rows highlighted red.
 - **Detail panel**: Selected request's full headers + body. JSON auto-formatted if valid.
 - **Controls**:
@@ -182,6 +183,7 @@ Log file default: `~/.config/mitm-proxy/traffic.jsonl`. Configurable via `--log-
 | `--tui` | auto (on TTY) | Force TUI on/off |
 | `--no-tui` | — | Run headless, log only |
 | `--max-body-bytes` | `1048576` | Max body size to capture (bytes) |
+| `--capture-all` | — | Capture bodies for all content types (default: skip media types) |
 
 **Startup**:
 1. Resolve `--log-file` path, ensure directory exists.
@@ -249,6 +251,8 @@ export interface CapturedTransaction {
   durationMs: number;
   error: string | null;
   contentEncoding: string | null;
+  resBodyPreview: string | null;
+  resBodyPreviewEncoding: string | null;
 }
 
 export type AnalyzerEvent =
