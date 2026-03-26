@@ -41,7 +41,8 @@ Uses `node-forge` for all PKI operations:
 
 1. On first run: generate a CA keypair (RSA 2048), store at `~/.config/mitm-proxy/ca.pem` / `ca-key.pem` with `0600` permissions.
 2. Per-connection (HTTPS MITM): generate a leaf cert signed by the CA for the target hostname, with SANs covering the host. Cache signed leaf certs in-memory (key: `hostname`) to avoid re-signing for repeated connections.
-3. Leaf cert validity: 24 hours. Cache entry expires after TTL.
+3. Leaf cert validity: 24 hours. Cache uses **lazy TTL checking**: on each access, if entry age > 24h, the entry is invalidated and a new cert is generated. A background timer runs every hour to purge expired entries to bound memory.
+4. Max cache size: 500 entries. LRU eviction if limit exceeded. (This is a future enhancement; MVP uses unbounded cache with lazy TTL.)
 
 ### HTTPS MITM Pipeline (explicit proxy)
 
@@ -59,13 +60,19 @@ Client                     Proxy                          Target Server
   │◀─── TLS response ═════════│                                  │
 ```
 
+**Hostname source for leaf cert:** The hostname is extracted from the `CONNECT host:port` request line (before TLS is established). For clients that send SNI in a subsequent TLS ClientHello, that value is used as a fallback/validation.
+
 Steps:
-1. Client sends `CONNECT host:port`.
-2. Proxy opens TCP connection to upstream, performs real TLS handshake to server.
-3. Proxy generates forged leaf cert for `host`, performs TLS handshake with client using it.
+1. Client sends `CONNECT host:port`. Proxy records `host` and `port`.
+2. Proxy opens TCP connection to `host:port` on the real upstream server.
+3. Proxy generates a forged leaf cert for `host` (signed by the CA), performs TLS handshake with the client using it.
 4. Proxy parses HTTP request/response over both decrypted streams.
 5. Logs captured transaction.
-6. Pipes remaining bytes bidirectionally (streaming passthrough).
+6. Pipes remaining bytes bidirectionally (streaming passthrough) — the connection is now transparent.
+
+**Non-standard CONNECT ports:** If the client sends `CONNECT example.com:8443`, the proxy uses port `8443` (not 443) for the upstream TCP connection.
+
+**WebSocket over CONNECT:** `Upgrade: websocket` headers are logged as metadata on the transaction. The TCP stream is pass-through without body inspection.
 
 ### Transparent Proxy Mode
 
@@ -83,7 +90,7 @@ Transparent mode requires OS-level routing configuration (outside this tool's sc
 Each line is a JSON object (no trailing comma, no wrapping array). One record per completed (or failed) transaction.
 
 ```json
-{"id":"uuid","timestamp":"2026-03-26T10:00:00.000Z","method":"GET","url":"https://example.com/api","reqHeaders":{"Host":"example.com","Accept":"*/*"},"resHeaders":{"content-type":"application/json"},"reqBody":null,"reqBodyEncoding":null,"reqBodyTruncated":false,"resBody":"{\"ok\":true}","resBodyEncoding":"utf8","resBodyTruncated":false,"statusCode":200,"durationMs":142,"error":null}
+{"id":"uuid","timestamp":"2026-03-26T10:00:00.000Z","method":"GET","url":"https://example.com/api","reqHeaders":{"Host":"example.com","Accept":"*/*"},"resHeaders":{"content-type":"application/json"},"reqBody":null,"reqBodyEncoding":null,"reqBodyTruncated":false,"resBody":"{\"ok\":true}","resBodyEncoding":"utf8","resBodyTruncated":false,"statusCode":200,"durationMs":142,"contentEncoding":null,"resBodyPreview":"{\"ok\":true}","resBodyPreviewEncoding":null,"error":null}
 ```
 
 **Fields:**
@@ -106,6 +113,15 @@ Each line is a JSON object (no trailing comma, no wrapping array). One record pe
 | `durationMs` | `number` | Time from request start to response complete. |
 | `error` | `string \| null` | `null` if success, error message if failed. |
 | `contentEncoding` | `string \| null` | Raw `Content-Encoding` header value (e.g. `"gzip"`), `null` if absent. Stored so consumers can re-decode. |
+| `resBodyPreview` | `string \| null` | Best-effort decoded UTF-8 preview of `resBody`. `null` if decoding fails, is skipped, or body is absent. |
+| `resBodyPreviewEncoding` | `string \| null` | The encoding applied to produce `resBodyPreview` (e.g. `"gzip"`), or `null`. |
+
+**Body encoding logic:**
+- Attempt UTF-8 decode via `TextDecoder`.
+- If successful AND the `Content-Type` is text-like (`text/*`, `application/json`, `application/xml`, `application/javascript`), store as `"utf8"`.
+- Otherwise, store raw bytes as `"base64"`.
+- If body is empty or absent: body and encoding fields are `null`.
+- For compressed bodies (`Content-Encoding: gzip`/`br`/`deflate`): store the raw encoded bytes in `resBody`; set `resBodyPreview` to the best-effort decoded UTF-8 preview (or `null` if decode fails).
 
 **Resource limits:**
 - `maxBodyBytes`: default `1 MB` (1_048_576). Configurable via `--max-body-bytes`.
@@ -159,12 +175,13 @@ Log file default: `~/.config/mitm-proxy/traffic.jsonl`. Configurable via `--log-
 |---|---|---|
 | `--port` | `8080` | Proxy listen port |
 | `--host` | `127.0.0.1` | Proxy listen host |
-| `--log-file` | `~/.mitm-proxy/traffic.jsonl` | JSONL output path |
+| `--log-file` | `~/.config/mitm-proxy/traffic.jsonl` | JSONL output path |
 | `--ca-cert` | auto-generated | Path to CA cert PEM |
 | `--ca-key` | auto-generated | Path to CA key PEM |
-| `--mode` | `explicit` | `explicit` or `transparent` |
+| `--mode` | `explicit` | `explicit` or `transparent` (transparent is future work) |
 | `--tui` | auto (on TTY) | Force TUI on/off |
 | `--no-tui` | — | Run headless, log only |
+| `--max-body-bytes` | `1048576` | Max body size to capture (bytes) |
 
 **Startup**:
 1. Resolve `--log-file` path, ensure directory exists.
@@ -238,6 +255,9 @@ export type AnalyzerEvent =
   | { type: "transactionAdded"; transaction: CapturedTransaction }
   | { type: "statsUpdated"; stats: StatsSnapshot };
 
+// Note: `statsUpdated` is emitted at most once per second to avoid render thrashing
+// in the TUI when the proxy handles high request rates.
+
 export interface StatsSnapshot {
   total: number;
   errors: number;
@@ -248,6 +268,7 @@ export interface StatsSnapshot {
 export interface ProxyOptions {
   host: string;
   port: number;
+  mode: "explicit" | "transparent"; // transparent is stubbed for future work
   caCertPath: string;
   caKeyPath: string;
   maxBodyBytes: number;
@@ -261,7 +282,9 @@ export interface ProxyOptions {
 class ProxyServer {
   constructor(opts: ProxyOptions);
   start(): Promise<void>;   // binds port, starts listening
-  stop(): Promise<void>;    // closes server, drains connections
+  stop(): Promise<void>;    // closes listening socket, waits up to 5s for in-flight
+                            // transactions to complete (logs them), then force-closes
+                            // any remaining connections
 }
 ```
 
@@ -271,8 +294,8 @@ class ProxyServer {
 class JsonlLogger {
   constructor(logPath: string);
   write(record: CapturedTransaction): void;  // async, fire-and-forget
-  flush(): Promise<void>;                     // called on shutdown
-  close(): Promise<void>;
+  flush(): Promise<void>;    // drains internal buffer to OS (no guarantee of fsync)
+  close(): Promise<void>;    // flush() then close file descriptor; called on shutdown
 }
 ```
 
@@ -280,7 +303,7 @@ class JsonlLogger {
 
 ```ts
 class TrafficAnalyzer extends EventEmitter<AnalyzerEvent> {
-  constructor(maxRecords?: number);
+  constructor(maxRecords?: number);  // default: 10,000; older records evicted FIFO
   add(transaction: CapturedTransaction): void;
   getAll(): CapturedTransaction[];
   getStats(): StatsSnapshot;
@@ -292,6 +315,8 @@ class TrafficAnalyzer extends EventEmitter<AnalyzerEvent> {
 ```ts
 async function runTUI(analyzer: TrafficAnalyzer, server: ProxyServer): Promise<void>;
 ```
+
+**Bun concurrency model:** Bun uses a single-threaded event loop for JavaScript. The TUI uses `blessed.screen` with `screen.key()` callbacks that fire as events — it does **not** use a blocking `while` loop. Bun's event loop handles both TUI keypress events and async proxy socket I/O concurrently. The TUI calls `screen.render()` after each batch of state changes.
 
 ---
 
