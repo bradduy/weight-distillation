@@ -32,34 +32,88 @@ Client App  ──▶  Proxy Server  ──▶  Remote Server
 ## Proxy Server
 
 - **Runtime**: Bun with TypeScript.
-- **MITM**: On-the-fly CA cert generation using `selfsigned` package. CA cert stored at `~/.config/mitm-proxy/ca.pem` (created on first run).
-- **HTTP**: Standard `node:http` forward proxy — forwards `http://` URLs directly.
-- **HTTPS (explicit)**: Intercept `CONNECT host:port`, establish TLS to client, TLS to server, pipe both directions, log after.
-- **HTTPS (transparent)**: OS-level `iptables` rules route traffic to the proxy. The proxy accepts plaintext and relays. (Transparent mode requires OS config outside the tool.)
+- **HTTP/1.1 only** — HTTP/2 over TLS is out of scope for MVP (will be logged at connection level without body inspection). WebSocket `Upgrade` headers are logged as metadata only (pass-through).
 - **Default listen**: `localhost:8080`, configurable via `--port` / `--host`.
+
+### MITM Certificate Lifecycle
+
+Uses `node-forge` for all PKI operations:
+
+1. On first run: generate a CA keypair (RSA 2048), store at `~/.config/mitm-proxy/ca.pem` / `ca-key.pem` with `0600` permissions.
+2. Per-connection (HTTPS MITM): generate a leaf cert signed by the CA for the target hostname, with SANs covering the host. Cache signed leaf certs in-memory (key: `hostname`) to avoid re-signing for repeated connections.
+3. Leaf cert validity: 24 hours. Cache entry expires after TTL.
+
+### HTTPS MITM Pipeline (explicit proxy)
+
+```
+Client                     Proxy                          Target Server
+  │                           │                                  │
+  │──── CONNECT host:443 ────▶│                                  │
+  │◀─── 200 Connection Est. ──│                                  │
+  │                           │                                  │
+  │══ TLS (forged leaf) ═════▶│                                  │══ TLS (real) ══════▶│
+  │  HTTP/1.1 request        │  Decrypt → parse → log           │  HTTP/1.1 request   │
+  │                           │─────────────────────────────────▶│                      │
+  │                           │◀─────────────────────────────────│  HTTP/1.1 response  │
+  │  HTTP/1.1 response       │  parse → log → encrypt          │                      │
+  │◀─── TLS response ═════════│                                  │
+```
+
+Steps:
+1. Client sends `CONNECT host:port`.
+2. Proxy opens TCP connection to upstream, performs real TLS handshake to server.
+3. Proxy generates forged leaf cert for `host`, performs TLS handshake with client using it.
+4. Proxy parses HTTP request/response over both decrypted streams.
+5. Logs captured transaction.
+6. Pipes remaining bytes bidirectionally (streaming passthrough).
+
+### Transparent Proxy Mode
+
+Transparent mode requires OS-level routing configuration (outside this tool's scope):
+
+- **Linux**: `iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080` (HTTP only). HTTPS transparent MITM requires `SO_ORIGINAL_DST` socket option + root privileges + iptables TPROXY target.
+- **macOS**: `pf` rules with `rdr-to`.
+
+> **Status for MVP**: Transparent mode is documented here for future work. Initial release implements explicit proxy only (`--mode explicit`).
 
 ---
 
 ## JSONL Log Format
 
-Each line is a JSON object (no trailing comma, no wrapping array):
+Each line is a JSON object (no trailing comma, no wrapping array). One record per completed (or failed) transaction.
 
 ```json
-{"id":"uuid","timestamp":"2026-03-26T10:00:00.000Z","method":"GET","url":"https://example.com/api","reqHeaders":{"Host":"example.com","Accept":"*/*"},"resHeaders":{"content-type":"application/json"},"reqBody":null,"resBody":"{\"ok\":true}","statusCode":200,"durationMs":142,"error":null}
+{"id":"uuid","timestamp":"2026-03-26T10:00:00.000Z","method":"GET","url":"https://example.com/api","reqHeaders":{"Host":"example.com","Accept":"*/*"},"resHeaders":{"content-type":"application/json"},"reqBody":null,"reqBodyEncoding":null,"reqBodyTruncated":false,"resBody":"{\"ok\":true}","resBodyEncoding":"utf8","resBodyTruncated":false,"statusCode":200,"durationMs":142,"error":null}
 ```
 
-Fields:
-- `id`: UUID v4, unique per request.
-- `timestamp`: ISO 8601 UTC.
-- `method`: HTTP method string.
-- `url`: Full URL string.
-- `reqHeaders` / `resHeaders`: Object of header key-value pairs.
-- `reqBody` / `resBody`: String if UTF-8 text, base64-encoded string if binary. `null` if empty.
-- `statusCode`: Numeric HTTP status (0 if errored before response).
-- `durationMs`: Time from request start to response complete.
-- `error`: `null` if success, error message string if failed.
+**Fields:**
 
-Log file default: `~/.mitm-proxy/traffic.jsonl`. Configurable via `--log-file`.
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | UUID v4, unique per request. |
+| `timestamp` | `string` | ISO 8601 UTC, time request started. |
+| `method` | `string` | HTTP method. |
+| `url` | `string` | Full URL. |
+| `reqHeaders` | `Record<string,string>` | Request headers. |
+| `resHeaders` | `Record<string,string>` | Response headers. |
+| `reqBody` | `string \| null` | Request body; `null` if absent. |
+| `reqBodyEncoding` | `"utf8" \| "base64" \| null` | `null` when `reqBody` is `null`. |
+| `reqBodyTruncated` | `boolean` | `true` if body exceeded `maxBodyBytes`. |
+| `resBody` | `string \| null` | Response body; `null` if absent. |
+| `resBodyEncoding` | `"utf8" \| "base64" \| null` | `null` when `resBody` is `null`. |
+| `resBodyTruncated` | `boolean` | `true` if body exceeded `maxBodyBytes`. |
+| `statusCode` | `number` | HTTP status; `0` if failed before response. |
+| `durationMs` | `number` | Time from request start to response complete. |
+| `error` | `string \| null` | `null` if success, error message if failed. |
+| `contentEncoding` | `string \| null` | Raw `Content-Encoding` header value (e.g. `"gzip"`), `null` if absent. Stored so consumers can re-decode. |
+
+**Resource limits:**
+- `maxBodyBytes`: default `1 MB` (1_048_576). Configurable via `--max-body-bytes`.
+- Bodies exceeding `maxBodyBytes` are truncated; `*Truncated` flag is set to `true`.
+- Content types skipped from body capture by default: `video/*`, `audio/*`, `image/*`, `font/*`. (Forced capture with `--capture-all`.)
+- Content-encoding (`gzip`, `br`, `deflate`): stored raw with `contentEncoding` field. UI attempts best-effort decode for preview; raw body always available.
+
+Log file default: `~/.config/mitm-proxy/traffic.jsonl`. Configurable via `--log-file`.
 
 ---
 
@@ -116,8 +170,8 @@ Log file default: `~/.mitm-proxy/traffic.jsonl`. Configurable via `--log-file`.
 1. Resolve `--log-file` path, ensure directory exists.
 2. Load or generate CA cert/key.
 3. Start `ProxyServer` (non-blocking).
-4. If TTY: start `TUI` (blocks). If headless: log to stdout on startup then background.
-5. Handle `SIGINT` / `SIGTERM`: graceful shutdown of proxy + flush logs.
+4. If TTY: start `TUI` (blocks main thread). If headless (`--no-tui`): print "Proxy running on localhost:8080" then stay foreground until SIGINT.
+5. Handle `SIGINT` / `SIGTERM`: graceful shutdown of proxy + flush logs + exit.
 
 ---
 
@@ -125,9 +179,9 @@ Log file default: `~/.mitm-proxy/traffic.jsonl`. Configurable via `--log-file`.
 
 - **Proxy errors**: Logged to JSONL with `error` field. TUI shows red indicator on failed rows.
 - **Startup errors**: Missing CA cert permissions → clear error message pointing to `~/.config/mitm-proxy/`.
-- **Body encoding**: Non-UTF-8 response bodies stored as base64 + `="_b64"` suffix in JSONL.
-- **TUI killed**: Proxy continues running; TUI restart reconnects to live stream.
-- **Corrupt JSONL line**: Log writer never writes partial lines — use buffered writes, flush on newline.
+- **Body encoding**: UTF-8 text bodies stored as plain strings. Binary / non-decodable bodies stored as base64 strings with `reqBodyEncoding: "base64"` / `resBodyEncoding: "base64"`.
+- **Single-process model**: TUI and proxy run in the same process. Closing TUI (via `q`) shuts down the proxy cleanly. SIGINT/SIGTERM from terminal also triggers clean shutdown.
+- **Corrupt JSONL line**: Log writer never writes partial lines — buffered writes, flush on newline.
 
 ---
 
@@ -156,14 +210,100 @@ Log file default: `~/.mitm-proxy/traffic.jsonl`. Configurable via `--log-file`.
 
 ---
 
+## Component Interfaces
+
+### Shared Types (`src/proxy/types.ts`)
+
+```ts
+export interface CapturedTransaction {
+  id: string;           // UUID v4
+  timestamp: string;    // ISO 8601
+  method: string;
+  url: string;
+  reqHeaders: Record<string, string>;
+  resHeaders: Record<string, string>;
+  reqBody: string | null;
+  reqBodyEncoding: "utf8" | "base64" | null;
+  reqBodyTruncated: boolean;
+  resBody: string | null;
+  resBodyEncoding: "utf8" | "base64" | null;
+  resBodyTruncated: boolean;
+  statusCode: number;
+  durationMs: number;
+  error: string | null;
+  contentEncoding: string | null;
+}
+
+export type AnalyzerEvent =
+  | { type: "transactionAdded"; transaction: CapturedTransaction }
+  | { type: "statsUpdated"; stats: StatsSnapshot };
+
+export interface StatsSnapshot {
+  total: number;
+  errors: number;
+  latencyP50ms: number;
+  latencyP95ms: number;
+}
+
+export interface ProxyOptions {
+  host: string;
+  port: number;
+  caCertPath: string;
+  caKeyPath: string;
+  maxBodyBytes: number;
+  onTransaction: (tx: CapturedTransaction) => void;
+}
+```
+
+### `ProxyServer` (`src/proxy/server.ts`)
+
+```ts
+class ProxyServer {
+  constructor(opts: ProxyOptions);
+  start(): Promise<void>;   // binds port, starts listening
+  stop(): Promise<void>;    // closes server, drains connections
+}
+```
+
+### `JsonlLogger` (`src/logger/jsonl.ts`)
+
+```ts
+class JsonlLogger {
+  constructor(logPath: string);
+  write(record: CapturedTransaction): void;  // async, fire-and-forget
+  flush(): Promise<void>;                     // called on shutdown
+  close(): Promise<void>;
+}
+```
+
+### `TrafficAnalyzer` (`src/analyzer/index.ts`)
+
+```ts
+class TrafficAnalyzer extends EventEmitter<AnalyzerEvent> {
+  constructor(maxRecords?: number);
+  add(transaction: CapturedTransaction): void;
+  getAll(): CapturedTransaction[];
+  getStats(): StatsSnapshot;
+}
+```
+
+### `TUI` (`src/tui/index.ts`)
+
+```ts
+async function runTUI(analyzer: TrafficAnalyzer, server: ProxyServer): Promise<void>;
+```
+
+---
+
 ## Dependencies
 
 - `bun` — runtime
 - `typescript` — type checking
-- `selfsigned` — CA cert generation
-- `mitm-proxy` or custom `node:http` + `node:tls` — proxy core
-- `bubbleteam/blessed` — terminal UI
+- `node-forge` — CA cert generation, leaf cert signing, RSA key operations
+- `blessed` — terminal UI
 - `@types/bun` — Bun type definitions
+
+> **Note**: `mitm-proxy` is not a dependency. MITM is implemented from scratch using Bun's built-in `node:http`, `node:net`, and `node:crypto` APIs plus `node-forge` for cert operations.
 
 ---
 
