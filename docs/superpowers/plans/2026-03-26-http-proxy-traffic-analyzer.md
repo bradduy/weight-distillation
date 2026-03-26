@@ -14,7 +14,7 @@
 
 | File | Responsibility |
 |---|---|
-| `package.json` | Dependencies: bun, typescript, node-forge, blessed, @types/bun |
+| `package.json` | Dependencies: bun, typescript, node-forge, blessed, @types/bun, @types/node |
 | `tsconfig.json` | Target ES2022, module nodenext, strict |
 | `src/proxy/types.ts` | All shared interfaces: `CapturedTransaction`, `AnalyzerEvent`, `StatsSnapshot`, `ProxyOptions` |
 | `src/logger/jsonl.ts` | `JsonlLogger` — buffered append-only writer |
@@ -229,7 +229,7 @@ Expected: FAIL — `JsonlLogger` does not exist
 - [ ] **Step 3: Write the implementation — `src/logger/jsonl.ts`**
 
 ```ts
-import { appendFileSync, mkdirSync, openSync, closeSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname } from "node:path";
 import type { CapturedTransaction } from "../proxy/types.ts";
 
@@ -302,6 +302,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ```ts
 import { describe, test, expect } from "bun:test";
 import { TrafficAnalyzer } from "./index";
+// EventEmitter is imported via the analyzer; the emitter interface is tested below
 import type { CapturedTransaction } from "../proxy/types";
 
 function makeTx(overrides: Partial<CapturedTransaction> = {}): CapturedTransaction {
@@ -337,6 +338,24 @@ describe("TrafficAnalyzer", () => {
     expect(a.getAll()[0].id).toBe("test-1");
   });
 
+  test("add() emits transactionAdded event", () => {
+    const a = new TrafficAnalyzer();
+    let emitted = false;
+    a.on("transactionAdded" as any, ({ transaction }: any) => { emitted = true; expect(transaction.id).toBe("test-emit"); });
+    a.add(makeTx({ id: "test-emit" }));
+    expect(emitted).toBe(true);
+  });
+
+  test("add() emits statsUpdated event (throttled to once per second)", () => {
+    const a = new TrafficAnalyzer();
+    let statsCount = 0;
+    a.on("statsUpdated" as any, () => { statsCount++; });
+    // Two rapid adds should only emit statsUpdated once (throttled)
+    a.add(makeTx());
+    a.add(makeTx());
+    expect(statsCount).toBe(1);
+  });
+
   test("ring buffer evicts oldest when over limit", () => {
     const a = new TrafficAnalyzer(3);
     for (let i = 0; i < 5; i++) a.add(makeTx({ id: String(i) }));
@@ -362,8 +381,8 @@ describe("TrafficAnalyzer", () => {
       a.add(makeTx({ durationMs: i * 10 }));
     }
     const stats = a.getStats();
-    expect(stats.latencyP50ms).toBe(55);  // median of [10,20,30,40,50,60,70,80,90,100]
-    expect(stats.latencyP95ms).toBe(95);  // 95th percentile
+    expect(stats.latencyP50ms).toBe(50);   // nearest-rank: ceil(0.50*10)=5, sorted[4]=50
+    expect(stats.latencyP95ms).toBe(100);  // nearest-rank: ceil(0.95*10)=10, sorted[9]=100
   });
 });
 ```
@@ -376,24 +395,28 @@ Expected: FAIL — `TrafficAnalyzer` does not exist
 - [ ] **Step 3: Write the implementation — `src/analyzer/index.ts`**
 
 ```ts
-import type { CapturedTransaction, StatsSnapshot } from "../proxy/types.ts";
+import { EventEmitter } from "node:events";
+import type { CapturedTransaction, AnalyzerEvent, StatsSnapshot } from "../proxy/types.ts";
 
 function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  const idx = (p / 100) * (sorted.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  if (lo === hi) return sorted[lo];
-  return sorted[lo] * (hi - idx) + sorted[hi] * (idx - lo);
+  const n = sorted.length;
+  // Nearest-rank method: rank = ceil(p/100 * n)
+  const rank = Math.ceil((p / 100) * n);
+  const idx = Math.min(rank - 1, n - 1); // clamp to array bounds
+  return sorted[idx];
 }
 
-export class TrafficAnalyzer {
+const STATS_THROTTLE_MS = 1000;
+
+export class TrafficAnalyzer extends EventEmitter<AnalyzerEvent> {
   private records: CapturedTransaction[] = [];
   private readonly maxRecords: number;
   private lastStatsEmit = 0;
 
   constructor(maxRecords = 10_000) {
+    super();
     this.maxRecords = maxRecords;
   }
 
@@ -401,6 +424,13 @@ export class TrafficAnalyzer {
     this.records.push(transaction);
     if (this.records.length > this.maxRecords) {
       this.records.shift();
+    }
+    this.emit("transactionAdded", { transaction });
+
+    const now = Date.now();
+    if (now - this.lastStatsEmit >= STATS_THROTTLE_MS) {
+      this.lastStatsEmit = now;
+      this.emit("statsUpdated", { stats: this.getStats() });
     }
   }
 
@@ -478,26 +508,27 @@ export function ensureCa(certPath: string, keyPath: string): CaKeypair {
     return { certPem: readFileSync(certPath, "utf8"), keyPem: readFileSync(keyPath, "utf8") };
   }
 
-  // Generate CA
-  const ca = forge.pki.createCA();
+  // Generate CA: RSA keypair + self-signed certificate
   const attrs = [{ name: "commonName", value: "mitm-proxy CA" }];
+  const caKeypair = forge.pki.rsa.generateKeyPair({ bits: 2048 });
   const caSerial = forge.util.bytesToHex(forge.util.createBuffer().fill(0, 20));
+
   const cert = forge.pki.createCertificate();
   cert.serialNumber = caSerial;
   cert.validity.notBefore = new Date();
   cert.validity.notAfter = new Date();
   cert.validity.notAfter.setDate(cert.validity.notBefore.getDate() + CA_VALIDITY_DAYS);
   cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.publicKey = ca.publicKey;
+  cert.setIssuer(attrs); // self-signed: issuer = subject
+  cert.publicKey = caKeypair.publicKey;
   cert.setExtensions([
     { name: "basicConstraints", cA: true, pathLenConstraint: 0 },
     { name: "keyUsage", keyCertSign: true, digitalSignature: true, keyEncipherment: true },
   ]);
-  cert.sign(ca, forge.md.sha256.create());
+  cert.sign(caKeypair.privateKey, forge.md.sha256.create());
 
   const certPem = forge.pki.certificateToPem(cert);
-  const keyPem = forge.pki.privateKeyToPem(ca);
+  const keyPem = forge.pki.privateKeyToPem(caKeypair.privateKey);
 
   writeFileSync(certPath, certPem, { mode: 0o600 });
   writeFileSync(keyPath, keyPem, { mode: 0o600 });
@@ -608,17 +639,17 @@ import * as net from "node:net";
 import * as tls from "node:tls";
 import { createSecureContext } from "node:tls";
 import { URL } from "node:url";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 import type { CapturedTransaction, ProxyOptions } from "./types.ts";
 import { getLeafCert } from "./mitm.ts";
 
-const TEXT_CONTENT_TYPES = new Set([
-  "text/", "application/json", "application/xml", "application/javascript",
-]);
-
 function isTextContentType(ct: string | undefined): boolean {
   if (!ct) return false;
-  return TEXT_CONTENT_TYPES.has(ct.toLowerCase()) || ct.toLowerCase().startsWith("text/");
+  const lower = ct.toLowerCase();
+  return lower.startsWith("text/") ||
+    lower === "application/json" ||
+    lower === "application/xml" ||
+    lower === "application/javascript";
 }
 
 function encodeBody(body: Buffer, contentType: string | undefined, maxBytes: number): {
@@ -708,7 +739,7 @@ export class ProxyServer {
     const reqBody = Buffer.concat(body);
 
     const startTime = Date.now();
-    const txId = uuidv4();
+    const txId = randomUUID();
     const timestamp = new Date().toISOString();
 
     const clientReqHeaders: Record<string, string> = {};
@@ -769,7 +800,7 @@ export class ProxyServer {
     const [host, portStr] = (req.url ?? "").split(":");
     const port = parseInt(portStr, 10) || 443;
     const startTime = Date.now();
-    const txId = uuidv4();
+    const txId = randomUUID();
     const timestamp = new Date().toISOString();
 
     // Acknowledge CONNECT
@@ -861,11 +892,21 @@ export class ProxyServer {
               clientTls!.write(rawBody);
               clientTls!.end();
 
+              // Encode request body once, capture all three fields
+              const reqBodyBuf = Buffer.concat(reqBody);
+              const {
+                body: reqBodyVal,
+                encoding: reqBodyEnc,
+                truncated: reqBodyTruncVal,
+              } = reqBody.length > 0
+                ? encodeBody(reqBodyBuf, headers["content-type"], this.opts.maxBodyBytes)
+                : { body: null, encoding: null, truncated: false };
+
               const tx: CapturedTransaction = {
                 id: txId, timestamp, method, url: fullUrl, reqHeaders, resHeaders,
-                reqBody: reqBody.length > 0 ? encodeBody(Buffer.concat(reqBody), headers["content-type"], this.opts.maxBodyBytes).body : null,
-                reqBodyEncoding: reqBody.length > 0 ? encodeBody(Buffer.concat(reqBody), headers["content-type"], this.opts.maxBodyBytes).encoding : null,
-                reqBodyTruncated: false,
+                reqBody: reqBodyVal,
+                reqBodyEncoding: reqBodyEnc,
+                reqBodyTruncated: reqBodyTruncVal,
                 resBody: encBody, resBodyEncoding: encoding, resBodyTruncated: truncated,
                 statusCode: upstreamRes.statusCode ?? 200, durationMs: Date.now() - startTime,
                 error: null, contentEncoding, resBodyPreview: preview, resBodyPreviewEncoding: previewEncoding,
@@ -1010,7 +1051,7 @@ export class RequestList {
     const label = `${tx.method.padEnd(8)} ${this.getPath(tx.url).padEnd(40)} ${String(tx.statusCode).padStart(3)} ${String(tx.durationMs).padStart(5)}ms`;
     const style = tx.error ? { fg: "red" } : tx.statusCode >= 400 ? { fg: "yellow" } : {};
     // @ts-ignore — blessed types are loose
-    this.list.add(label, { transaction: tx, style });
+    this.list.add(label, { style });
     this.list.setScrollPerc(100);
   }
 
@@ -1031,9 +1072,7 @@ export class RequestList {
   }
 
   getSelected(): CapturedTransaction | null {
-    // @ts-ignore
-    const item = this.list.getItem(this.selectedIndex);
-    return item?.transaction ?? null;
+    return this.items[this.selectedIndex] ?? null;
   }
 
   selectNext(): void {
@@ -1135,24 +1174,24 @@ export class DetailPanel {
 ```ts
 import * as blessed from "blessed";
 import type { TrafficAnalyzer } from "../analyzer/index.ts";
-import type { ProxyServer } from "../proxy/server.ts";
 import { RequestList } from "./request-list.ts";
 import { DetailPanel } from "./detail-panel.ts";
 
-export async function runTUI(analyzer: TrafficAnalyzer, server: ProxyServer): Promise<void> {
+export async function runTUI(analyzer: TrafficAnalyzer, address: string): Promise<void> {
   const screen = blessed.screen({ smartCSR: true });
 
   // Top bar
   const topBar = blessed.box({
     parent: screen,
     top: 0, left: 0, right: 0, height: 1,
-    content: " mitm-proxy  starting...",
+    content: ` mitm-proxy  ${address}`,
     style: { fg: "white", bg: "blue" },
   });
 
-  // Request list (top 60% of screen)
+  // Request list (between top bar and stats bar)
   const listContainer = blessed.box({
-    parent: screen, top: 1, left: 0, right: 0, height: "50%",
+    parent: screen, top: 1, left: 0, right: 0,
+    height: 10,
     border: { type: "line" }, label: " Requests ",
   });
 
@@ -1162,9 +1201,10 @@ export async function runTUI(analyzer: TrafficAnalyzer, server: ProxyServer): Pr
     onSelect: (tx) => detailPanel.setTransaction(tx),
   });
 
-  // Detail panel (bottom 50%)
+  // Detail panel (below list, above stats+hint bars)
+  // Uses top+bottom (not height) — blessed auto-calculates height when both are set
   const detailContainer = blessed.box({
-    parent: screen, top: "50%", left: 0, right: 0, height: "50%-1",
+    parent: screen, top: 12, left: 0, right: 0, bottom: 2,
     border: { type: "line" }, label: " Detail ",
     scrollable: true, alwaysScroll: true,
   });
@@ -1200,9 +1240,6 @@ export async function runTUI(analyzer: TrafficAnalyzer, server: ProxyServer): Pr
   screen.key(["down", "j"], () => { requestList.selectNext(); screen.render(); });
   screen.key(["c"], () => { requestList.clear(); screen.render(); });
   screen.key(["q"], () => { screen.destroy(); process.exit(0); });
-
-  // Set initial content
-  topBar.setContent(` mitm-proxy  ${server}  `);
 
   screen.render();
 }
@@ -1325,7 +1362,8 @@ async function main() {
   console.log(`[cli] Logging to ${logFile}`);
 
   if (showTui) {
-    await runTUI(analyzer, proxy);
+    const address = `${host}:${port}`;
+    await runTUI(analyzer, address);
   } else {
     console.log("[cli] Running headless. Press Ctrl+C to stop.");
   }
