@@ -8,6 +8,52 @@ Think of it as a black box recorder for your computer's network traffic — usef
 
 ---
 
+## How It Works
+
+```
+ Your App                          ai-reverse-engineering                      Internet
+───────────                        ─────────────────────────────              ────────
+                                    ┌──────────────────────────────────────┐
+                                    │         Proxy Server (localhost:8080)  │
+                                    │                                      │
+                                    │  ┌──── HTTP ────┐  ┌──── HTTPS ────┐ │
+                                    │  │              │  │               │ │
+ HTTP Request ────────────────────────▶│ Forward only │  │  MITM + TLS   │ │
+                                    │  │  (passthrough)│  │  Termination  │ │
+                                    │  └──────┬───────┘  └───┬──────────┘ │
+                                    │         │                │             │
+                                    │         └───────┬────────┘             │
+                                    │                 │                     │
+                                    │         ┌───────▼────────┐            │
+                                    │         │ Traffic Analyzer │            │
+                                    │         │  (ring buffer)  │            │
+                                    │         └───────┬────────┘            │
+                                    │                 │                     │
+                                    │    ┌────────────┼────────────┐       │
+                                    │    │            │            │       │
+                                    │    ▼            ▼            ▼       │
+                                    │ JSONL Logger  TUI Display  Future...     │
+                                    │    │                             │       │
+                                    │    ▼                             ▼       │
+ Traffic Log ◀──────────────────────┘  Log File              Terminal UI        │
+                                                                              │
+ HTTPS Response ◀─────────────────────────────────────────────────────────────
+```
+
+**The pipeline — step by step:**
+
+1. Your app sends a request through the proxy at `localhost:8080`
+2. The proxy intercepts it:
+   - **HTTP** — forwarded directly to the destination
+   - **HTTPS** — performs MITM: terminates the TLS connection, reads the decrypted request, then re-encrypts and forwards it to the real server
+3. The response passes through the proxy again in both directions
+4. The **Traffic Analyzer** buffers the request/response in memory and emits events
+5. Two consumers react simultaneously:
+   - **JSONL Logger** — appends the transaction to the log file
+   - **TUI** — updates the live dashboard with the new request
+
+---
+
 ## What It Does
 
 - **Intercepts all HTTP and HTTPS traffic** — including encrypted HTTPS requests, not just plain HTTP
