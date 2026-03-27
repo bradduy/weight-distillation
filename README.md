@@ -1,4 +1,4 @@
-# weight-distillation
+# (AI MODEL) WEIGHT DISTILLATION
 
 **Capture, distill, and analyze every HTTP/HTTPS call your AI models and apps make.**
 
