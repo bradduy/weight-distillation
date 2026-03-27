@@ -28,7 +28,7 @@ export function ensureCa(certPath: string, keyPath: string): CaKeypair {
     return { certPem: readFileSync(certPath, "utf8"), keyPem: readFileSync(keyPath, "utf8") };
   }
 
-  const attrs = [{ name: "commonName", value: "ai-reverse-engineering CA" }];
+  const attrs = [{ name: "commonName", value: "ai-distillation CA" }];
   const caKeypair = forge.pki.rsa.generateKeyPair({ bits: 2048 });
   const caSerial = forge.util.bytesToHex(forge.random.getBytesSync(20));
 

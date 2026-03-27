@@ -9,7 +9,7 @@ export async function runTUI(analyzer: TrafficAnalyzer, address: string): Promis
   // Top bar
   blessed.box({
     parent: screen, top: 0, left: 0, right: 0, height: 1,
-    content: ` ai-reverse-engineering  ${address}`,
+    content: ` ai-distillation  ${address}`,
     style: { fg: "white", bg: "blue" },
   });
 

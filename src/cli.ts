@@ -7,7 +7,7 @@ import { JsonlLogger } from "./logger/jsonl.js";
 import { ProxyServer } from "./proxy/server.js";
 import { runTUI } from "./tui/index.js";
 
-const CONFIG_DIR = expandPath("~/.config/mitm-proxy");
+const CONFIG_DIR = expandPath("~/.config/ai-distillation");
 const DEFAULT_LOG = `${CONFIG_DIR}/traffic.jsonl`;
 const DEFAULT_CA_CERT = `${CONFIG_DIR}/ca.pem`;
 const DEFAULT_CA_KEY = `${CONFIG_DIR}/ca-key.pem`;

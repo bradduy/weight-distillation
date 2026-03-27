@@ -1,53 +1,54 @@
-# ai-reverse-engineering
+# ai-distillation
 
-**Inspect, debug, and reverse-engineer HTTP/HTTPS traffic from any app on your machine.**
+**Capture, distill, and analyze every HTTP/HTTPS call your AI models and apps make.**
 
-This tool runs a local proxy server that sits between your apps and the internet. It intercepts every HTTP and HTTPS request your apps make, shows them to you in real-time, and logs them to a file for later analysis.
+This tool runs a local proxy server that sits between your apps and the internet. It intercepts every HTTP and HTTPS request your apps make — including AI API calls — captures the full request and response, shows them to you in real-time, and logs them for later analysis.
 
-Think of it as a black box recorder for your computer's network traffic — useful for developers debugging APIs, security researchers analyzing app behavior, or anyone curious about what an app is communicating with.
+Think of it as a black box recorder for your AI model's network traffic — useful for debugging prompts, inspecting responses, auditing API usage, and understanding what your AI stack is actually communicating with.
 
 ---
 
 ## How It Works
 
 ```
- Your App                          ai-reverse-engineering                      Internet
-───────────                        ─────────────────────────────              ────────
-                                    ┌──────────────────────────────────────┐
-                                    │         Proxy Server (localhost:8080)  │
-                                    │                                      │
-                                    │  ┌──── HTTP ────┐  ┌──── HTTPS ────┐ │
-                                    │  │              │  │               │ │
- HTTP Request ────────────────────────▶│ Forward only │  │  MITM + TLS   │ │
-                                    │  │  (passthrough)│  │  Termination  │ │
-                                    │  └──────┬───────┘  └───┬──────────┘ │
-                                    │         │                │             │
-                                    │         └───────┬────────┘             │
-                                    │                 │                     │
-                                    │         ┌───────▼────────┐            │
-                                    │         │ Traffic Analyzer │            │
-                                    │         │  (ring buffer)  │            │
-                                    │         └───────┬────────┘            │
-                                    │                 │                     │
-                                    │    ┌────────────┼────────────┐       │
-                                    │    │            │            │       │
-                                    │    ▼            ▼            ▼       │
-                                    │ JSONL Logger  TUI Display  Future...     │
-                                    │    │                             │       │
-                                    │    ▼                             ▼       │
- Traffic Log ◀──────────────────────┘  Log File              Terminal UI        │
-                                                                              │
- HTTPS Response ◀─────────────────────────────────────────────────────────────
+ Your App / AI Model                    ai-distillation                        Internet
+───────────────────────                  ─────────────────────────────         ─────────
+
+                                           ┌──────────────────────────────────┐
+                                           │      Proxy Server (localhost:8080) │
+                                           │                                     │
+                                           │  ┌──── HTTP ────┐ ┌─── HTTPS ───┐ │
+                                           │  │              │ │              │ │
+ HTTP Request ─────────────────────────────▶│ Passthrough │ │ MITM + TLS  │ │
+                                           │  │              │ │ Termination │ │
+                                           │  └──────┬───────┘ └───┬──────────┘ │
+                                           │         │               │            │
+                                           │         └───────┬───────┘            │
+                                           │                 │                    │
+                                           │         ┌───────▼────────┐           │
+                                           │         │ Distillate Engine │           │
+                                           │         │   (ring buffer)   │           │
+                                           │         └───────┬────────┘           │
+                                           │                 │                    │
+                                           │    ┌────────────┼────────────┐       │
+                                           │    │            │            │       │
+                                           │    ▼            ▼            ▼       │
+                                           │ JSONL Log   Live Dashboard  Future...   │
+                                           │    │                             │       │
+                                           │    ▼                             ▼       │
+ Log File ◀────────────────────────────────┘    Log File              Terminal UI     │
+                                                                                  │
+ HTTPS Response ◀─────────────────────────────────────────────────────────────────
 ```
 
 **The pipeline — step by step:**
 
-1. Your app sends a request through the proxy at `localhost:8080`
+1. Your app or AI model sends a request through the proxy at `localhost:8080`
 2. The proxy intercepts it:
    - **HTTP** — forwarded directly to the destination
    - **HTTPS** — performs MITM: terminates the TLS connection, reads the decrypted request, then re-encrypts and forwards it to the real server
 3. The response passes through the proxy again in both directions
-4. The **Traffic Analyzer** buffers the request/response in memory and emits events
+4. The **Distillate Engine** buffers the request/response in memory and emits events
 5. Two consumers react simultaneously:
    - **JSONL Logger** — appends the transaction to the log file
    - **TUI** — updates the live dashboard with the new request
@@ -56,8 +57,8 @@ Think of it as a black box recorder for your computer's network traffic — usef
 
 ## What It Does
 
-- **Intercepts all HTTP and HTTPS traffic** — including encrypted HTTPS requests, not just plain HTTP
-- **Real-time terminal display** — watch requests scroll by as they happen, see status codes, response times, and bodies
+- **Captures all HTTP and HTTPS traffic** — including encrypted HTTPS requests from AI API calls
+- **Real-time terminal display** — watch requests scroll by as they happen, see status codes, latency, and bodies
 - **Persistent logging** — every request and response is saved to a JSONL file for replay or analysis
 - **No app changes required** — just point your app's proxy settings to `localhost:8080`
 
@@ -67,10 +68,11 @@ Think of it as a black box recorder for your computer's network traffic — usef
 
 | Who | Why |
 |---|---|
+| **AI/ML engineers** | Inspect prompts and responses sent to AI APIs, debug token usage |
 | **API developers** | Debug what your app is sending to an API, inspect headers and bodies |
-| **Security researchers** | Analyze what apps are communicating with, detect suspicious traffic |
-| **QA engineers** | Record and replay traffic for integration testing |
-| **Curious users** | See exactly what an app is doing over the network |
+| **Security researchers** | Analyze what AI apps are communicating with, detect data exfiltration |
+| **QA engineers** | Record and replay API calls for integration testing |
+| **Curious users** | See exactly what an AI model is doing over the network |
 
 ---
 
@@ -116,7 +118,18 @@ export https_proxy=http://127.0.0.1:8080
 
 **CLI tools (curl, wget, etc.):**
 ```bash
-curl -x http://127.0.0.1:8080 https://example.com
+curl -x http://127.0.0.1:8080 https://api.openai.com/v1/chat/completions
+```
+
+**Python (OpenAI, Anthropic, etc.):**
+```python
+import os
+os.environ["http_proxy"] = "http://127.0.0.1:8080"
+os.environ["https_proxy"] = "http://127.0.0.1:8080"
+
+from openai import OpenAI
+client = OpenAI()
+# All requests will now be captured by ai-distillation
 ```
 
 ---
@@ -129,20 +142,20 @@ On first run, the tool generates its own Certificate Authority (CA) — essentia
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
   -k /Library/Keychains/System.keychain \
-  ~/.config/mitm-proxy/ca.pem
+  ~/.config/ai-distillation/ca.pem
 ```
 
 **Linux (Ubuntu / Debian):**
 ```bash
-sudo cp ~/.config/mitm-proxy/ca.pem \
-  /usr/local/share/ca-certificates/ai-reverse-engineering.crt
+sudo cp ~/.config/ai-distillation/ca.pem \
+  /usr/local/share/ca-certificates/ai-distillation.crt
 sudo update-ca-certificates
 ```
 
 **Firefox:**
 1. Open Firefox → Settings → Privacy & Security → Certificates → View Certificates
 2. Click **Authorities** → **Import**
-3. Select `~/.config/mitm-proxy/ca.pem`
+3. Select `~/.config/ai-distillation/ca.pem`
 4. Trust it for websites, then restart Firefox
 
 > **Note:** Chrome and Edge on macOS use the system Keychain, so the macOS command above covers them. Firefox manages its own certificate store — use the Firefox steps above.
@@ -159,7 +172,7 @@ bun run src/cli.ts [options]
 |---|---|---|
 | `--port` | `8080` | Port the proxy listens on |
 | `--host` | `127.0.0.1` | Host the proxy binds to |
-| `--log-file <path>` | `~/.config/mitm-proxy/traffic.jsonl` | Where to save the traffic log |
+| `--log-file <path>` | `~/.config/ai-distillation/traffic.jsonl` | Where to save the distillate log |
 | `--max-body-bytes <n>` | `1048576` | Max body size to capture (default: 1 MB) |
 | `--capture-all` | — | Capture bodies for media/image/font types (default: skipped) |
 | `--no-tui` | — | Run without the dashboard (logging only) |
@@ -171,17 +184,17 @@ bun run src/cli.ts [options]
 When you run without `--no-tui`, a terminal dashboard appears:
 
 ```
-┌─ ai-reverse-engineering ─────── 127.0.0.1:8080 ─ 200 reqs ──┐
-│ ▶ Requests                  Errors (0)   Latency p50: 45ms     │
+┌─ ai-distillation ─────────────── 127.0.0.1:8080 ─ 200 calls ──┐
+│ ▶ Requests                  Errors (0)   Latency p50: 45ms       │
 ├──────────────────────────────────────────────────────────────────┤
-│ GET  /api/users          200   12ms                              │
-│ POST /api/login          401   89ms                              │
-│ GET  /favicon.ico        404    3ms                              │
+│ POST /v1/chat/completions   200   320ms                           │
+│ GET  /v1/models             200    45ms                           │
+│ GET  /v1/embeddings         200   210ms                           │
 ├──────────────────────────────────────────────────────────────────┤
-│ #2  GET  https://api.example.com/api/users                        │
-│ Request Headers: [expand]                                          │
-│ Response Headers: [expand]                                         │
-│ Response Body: [press Enter to show]                              │
+│ #1  POST  https://api.openai.com/v1/chat/completions              │
+│ Request Headers: [expand]                                           │
+│ Request Body: [press Enter to show]                               │
+│ Response Body: [press Enter to show]                               │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -190,20 +203,21 @@ When you run without `--no-tui`, a terminal dashboard appears:
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Navigate through requests |
-| `Enter` | Show or hide the response body |
+| `Enter` | Show or hide the request/response body |
 | `c` | Clear the visible request list |
 | `q` | Quit |
 
 ---
 
-## Traffic Log File
+## Distillate Log File
 
-Every request and response is appended to the log file (`~/.config/mitm-proxy/traffic.jsonl` by default). Each line is a single JSON object — one record per HTTP transaction.
+Every request and response is appended to the log file (`~/.config/ai-distillation/traffic.jsonl` by default). Each line is a single JSON object — one record per HTTP transaction.
 
 The log survives app restarts and is useful for:
-- Post-mortem debugging
-- Generating test fixtures
-- Feeding into other analysis tools
+- **Prompt engineering** — replay real API calls to refine prompts
+- **Cost auditing** — count API calls and estimate token usage from body size
+- **Integration testing** — generate test fixtures from recorded calls
+- **Debugging** — post-mortem analysis of AI model behavior
 
 Example log entry:
 
@@ -212,11 +226,14 @@ Example log entry:
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "timestamp": "2026-03-27T10:00:00.000Z",
   "method": "POST",
-  "url": "https://api.example.com/auth/login",
-  "reqHeaders": { "Content-Type": "application/json", "Authorization": "Bearer ***" },
+  "url": "https://api.openai.com/v1/chat/completions",
+  "reqHeaders": {
+    "Authorization": "Bearer sk-***",
+    "Content-Type": "application/json"
+  },
   "resHeaders": { "Content-Type": "application/json" },
-  "reqBody": "{\"email\":\"user@example.com\",\"password\":\"***\"}",
-  "resBody": "{\"token\":\"eyJhbGci...\",\"expiresIn\":3600}",
+  "reqBody": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}",
+  "resBody": "{\"id\":\"chatcmpl-...\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"Hello! How can I help?\"}}]}",
   "statusCode": 200,
   "durationMs": 142,
   "error": null
@@ -229,11 +246,11 @@ Example log entry:
 
 This tool is for **local use on your own machine only**.
 
-The CA private key stored at `~/.config/mitm-proxy/ca-key.pem` is a sensitive secret. Anyone who has access to it can perform MITM attacks on your HTTPS traffic. Treat it accordingly:
+The CA private key stored at `~/.config/ai-distillation/ca-key.pem` is a sensitive secret. Anyone who has access to it can perform MITM attacks on your HTTPS traffic. Treat it accordingly:
 
 - Keep the file permissions restricted (`0600`) — the tool sets this automatically
 - Do not share the key or commit it to version control
-- Delete the CA files (`~/.config/mitm-proxy/`) if you no longer need the tool
+- Delete the CA files (`~/.config/ai-distillation/`) if you no longer need the tool
 
 ---
 
@@ -245,11 +262,11 @@ src/
 ├── proxy/
 │   ├── types.ts        # Shared data types
 │   ├── mitm.ts         # Certificate generation and signing
-│   └── server.ts       # HTTP/HTTPS proxy server
+│   └── server.ts      # HTTP/HTTPS proxy server
 ├── logger/
-│   └── jsonl.ts        # Traffic log file writer
+│   └── jsonl.ts        # Distillate log file writer
 ├── analyzer/
-│   └── index.ts        # In-memory traffic buffer and stats
+│   └── index.ts        # In-memory buffer and stats
 └── tui/
     ├── index.ts        # Terminal dashboard
     ├── request-list.ts # Request list widget
