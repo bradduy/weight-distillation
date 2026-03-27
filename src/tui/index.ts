@@ -28,7 +28,7 @@ export async function runTUI(analyzer: TrafficAnalyzer, address: string): Promis
   // Stats bar
   const statsBar = blessed.box({
     parent: screen, bottom: 1, left: 0, right: 0, height: 1,
-    content: " Errors: 0  Total: 0  p50: --ms  p95: --ms",
+    content: " Errors: 0  Total: 0  p50: --ms  p95: --ms  AI: 0 calls  $0.00",
     style: { fg: "green" },
   });
 
@@ -51,7 +51,7 @@ export async function runTUI(analyzer: TrafficAnalyzer, address: string): Promis
     requestList.addItem(transaction);
     const stats = analyzer.getStats();
     statsBar.setContent(
-      ` Errors: ${stats.errors}  Total: ${stats.total}  p50: ${stats.latencyP50ms}ms  p95: ${stats.latencyP95ms}ms`,
+      ` Errors: ${stats.errors}  Total: ${stats.total}  p50: ${stats.latencyP50ms}ms  p95: ${stats.latencyP95ms}ms  AI: ${stats.aiCalls} calls  $${stats.aiEstimatedCostUsd.toFixed(4)}  ${stats.aiTotalTokens.toLocaleString()} tokens`,
     );
     screen.render();
   });

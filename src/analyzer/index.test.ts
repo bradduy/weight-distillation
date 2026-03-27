@@ -3,7 +3,7 @@ import { TrafficAnalyzer } from "./index.js";
 import type { CapturedTransaction } from "../proxy/types.js";
 
 function makeTx(overrides: Partial<CapturedTransaction> = {}): CapturedTransaction {
-  return {
+  const base: CapturedTransaction = {
     id: Math.random().toString(36),
     timestamp: new Date().toISOString(),
     method: "GET",
@@ -22,8 +22,17 @@ function makeTx(overrides: Partial<CapturedTransaction> = {}): CapturedTransacti
     contentEncoding: null,
     resBodyPreview: null,
     resBodyPreviewEncoding: null,
-    ...overrides,
+    aiProvider: null,
+    aiModel: null,
+    aiPromptTokens: null,
+    aiCompletionTokens: null,
+    aiTotalTokens: null,
+    aiEstimatedCostUsd: null,
+    aiConversationId: null,
+    aiParentRequestId: null,
+    aiParsedResponse: null,
   };
+  return Object.assign({}, base, overrides);
 }
 
 describe("TrafficAnalyzer", () => {

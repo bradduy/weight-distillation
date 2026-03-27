@@ -15,6 +15,9 @@ describe("JsonlLogger", () => {
       resBody: null, resBodyEncoding: null, resBodyTruncated: false,
       statusCode: 200, durationMs: 10, error: null, contentEncoding: null,
       resBodyPreview: null, resBodyPreviewEncoding: null,
+      aiProvider: null, aiModel: null, aiPromptTokens: null, aiCompletionTokens: null,
+      aiTotalTokens: null, aiEstimatedCostUsd: null, aiConversationId: null,
+      aiParentRequestId: null, aiParsedResponse: null,
     };
     logger.write(record);
     await logger.close();
@@ -38,6 +41,9 @@ describe("JsonlLogger", () => {
         resBody: null, resBodyEncoding: null, resBodyTruncated: false,
         statusCode: 200, durationMs: 0, error: null, contentEncoding: null,
         resBodyPreview: null, resBodyPreviewEncoding: null,
+        aiProvider: null, aiModel: null, aiPromptTokens: null, aiCompletionTokens: null,
+        aiTotalTokens: null, aiEstimatedCostUsd: null, aiConversationId: null,
+        aiParentRequestId: null, aiParsedResponse: null,
       });
     }
     await logger.close();

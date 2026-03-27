@@ -45,6 +45,37 @@ export class DetailPanel {
     const errorLine = tx.error ? `\nERROR: ${tx.error}` : "";
     const bodyToggle = this.showBody ? " [press Enter to hide]" : " [press Enter to show]";
 
+    // AI distillation section
+    let aiSection = "";
+    if (tx.aiProvider) {
+      const tokens = tx.aiTotalTokens != null
+        ? `  Tokens: ${tx.aiTotalTokens.toLocaleString()} (${tx.aiPromptTokens?.toLocaleString() ?? "?"} prompt + ${tx.aiCompletionTokens?.toLocaleString() ?? "?"} completion)`
+        : "";
+      const cost = tx.aiEstimatedCostUsd != null
+        ? `  Est. cost: $${tx.aiEstimatedCostUsd}`
+        : "";
+      const modelLine = tx.aiModel ? `  Model: ${tx.aiModel}` : "";
+      aiSection = [
+        "",
+        "── AI Distillation ──",
+        `  Provider: ${tx.aiProvider}${modelLine}${tokens}${cost}`,
+      ].join("\n");
+      if (tx.aiParsedResponse) {
+        const pr = tx.aiParsedResponse;
+        const mathLine = pr.mathAnswer != null ? `  Math answer: \\boxed{${pr.mathAnswer}}` : "";
+        const toolLine = pr.toolCalls?.length
+          ? `  Tool calls: ${pr.toolCalls.map((t: any) => t.name).join(", ")}`
+          : "";
+        const codeBlockCount = pr.codeBlocks?.length ?? 0;
+        const codeLine = codeBlockCount > 0
+          ? `  Code blocks: ${codeBlockCount} (${pr.codeBlocks!.map((b: any) => b.language).join(", ")})`
+          : "";
+        const finishLine = pr.finishReason ? `  Finish: ${pr.finishReason}` : "";
+        aiSection += `\n${mathLine}${toolLine}${codeLine}${finishLine}`.trim();
+      }
+      if (tx.aiConversationId) aiSection += `\n  Session: ${tx.aiConversationId}`;
+    }
+
     const content = [
       `#${String(tx.id).slice(0, 8)}  ${tx.method}  ${tx.url}`,
       "",
@@ -55,6 +86,7 @@ export class DetailPanel {
       resHdrs,
       "",
       `Status: ${tx.statusCode}  Duration: ${tx.durationMs}ms${errorLine}`,
+      `${aiSection}`,
       "",
       `Response Body:${bodyToggle}`,
       bodyContent,

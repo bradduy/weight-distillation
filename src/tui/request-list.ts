@@ -21,10 +21,14 @@ export class RequestList {
   addItem(tx: CapturedTransaction): void {
     this.items.push(tx);
     const path = this.getPath(tx.url);
+    // Show AI model when detected
+    const aiTag = tx.aiModel
+      ? ` ${tx.aiProvider}/${tx.aiModel}`
+      : "";
     const label =
-      `${tx.method.padEnd(8)} ${path.padEnd(40)} ` +
-      `${String(tx.statusCode).padStart(3)} ${String(tx.durationMs).padStart(5)}ms`;
-    const style = tx.error ? { fg: "red" } : tx.statusCode >= 400 ? { fg: "yellow" } : {};
+      `${tx.method.padEnd(8)} ${path.slice(0, 36).padEnd(36)} ` +
+      `${String(tx.statusCode).padStart(3)} ${String(tx.durationMs).padStart(5)}ms${aiTag}`;
+    const style = tx.error ? { fg: "red" } : tx.aiProvider ? { fg: "cyan" } : tx.statusCode >= 400 ? { fg: "yellow" } : {};
     // @ts-ignore — blessed option types
     this.list.add(label, { style });
     this.list.setScrollPerc(100);

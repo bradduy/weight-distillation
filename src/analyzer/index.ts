@@ -50,11 +50,24 @@ export class TrafficAnalyzer extends EventEmitter {
     const durations = this.records.map((r) => r.durationMs);
     const total = this.records.length;
     const errors = this.records.filter((r) => r.error !== null).length;
+    const aiRecords = this.records.filter((r) => r.aiProvider !== null);
+    const aiCalls = aiRecords.length;
+    const aiTotalTokens = aiRecords.reduce(
+      (sum, r) => sum + (r.aiTotalTokens ?? 0),
+      0,
+    );
+    const aiEstimatedCostUsd = aiRecords.reduce(
+      (sum, r) => sum + (r.aiEstimatedCostUsd ?? 0),
+      0,
+    );
     return {
       total,
       errors,
       latencyP50ms: percentile(durations, 50),
       latencyP95ms: percentile(durations, 95),
+      aiCalls,
+      aiTotalTokens,
+      aiEstimatedCostUsd: Math.round(aiEstimatedCostUsd * 1_000_000) / 1_000_000,
     };
   }
 }
