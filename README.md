@@ -1,4 +1,4 @@
-# mitm-proxy
+# ai-reverse-engineering
 
 A local HTTP(S) MITM proxy with real-time TUI and JSONL logging.
 

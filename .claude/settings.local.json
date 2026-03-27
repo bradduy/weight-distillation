@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude --version)",
+      "Bash(ls -la ~/.*claude*)",
+      "Bash(echo $HOME)",
+      "Bash(bun install:*)",
+      "Bash(bun pm:*)",
+      "Bash(npm view:*)"
+    ]
+  }
+}
