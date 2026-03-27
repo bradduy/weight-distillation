@@ -6,6 +6,26 @@ This tool runs a local proxy server that sits between your apps and the internet
 
 Think of it as a black box recorder for your AI model's network traffic — useful for debugging prompts, inspecting responses, auditing API usage, and understanding what your AI stack is actually communicating with.
 
+## What’s New
+
+- **Renamed project** to `weight-distillation`
+- **AI distillation layer added** across the pipeline
+- **Provider detection** for major AI APIs (OpenAI, Anthropic, Google, Cohere, Mistral, Groq, Together, etc.)
+- **Model extraction + token estimation** from requests/responses
+- **Estimated cost tracking** (USD) per request and in aggregate
+- **Structured response parsing**:
+  - assistant message extraction
+  - `finish_reason` parsing
+  - math `\\boxed{}` answer extraction
+  - markdown code block extraction
+  - tool call extraction
+- **Conversation/session tracking** fields (`conversationId`, `parentMessageId` when available)
+- **TUI upgrades**:
+  - AI-aware stats bar (AI calls, total tokens, estimated cost)
+  - AI request rows highlighted and tagged with provider/model
+  - detailed AI distillation section in request details
+- **Updated usage/docs** for AI workflow and `~/.config/weight-distillation` paths
+
 ---
 
 ## How It Works
