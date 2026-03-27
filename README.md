@@ -1,4 +1,4 @@
-# ai-distillation
+# weight-distillation
 
 **Capture, distill, and analyze every HTTP/HTTPS call your AI models and apps make.**
 
@@ -11,7 +11,7 @@ Think of it as a black box recorder for your AI model's network traffic — usef
 ## How It Works
 
 ```
- Your App / AI Model                    ai-distillation                        Internet
+ Your App / AI Model                    weight-distillation                        Internet
 ───────────────────────                  ─────────────────────────────         ─────────
 
                                            ┌──────────────────────────────────┐
@@ -129,7 +129,7 @@ os.environ["https_proxy"] = "http://127.0.0.1:8080"
 
 from openai import OpenAI
 client = OpenAI()
-# All requests will now be captured by ai-distillation
+# All requests will now be captured by weight-distillation
 ```
 
 ---
@@ -142,20 +142,20 @@ On first run, the tool generates its own Certificate Authority (CA) — essentia
 ```bash
 sudo security add-trusted-cert -d -r trustRoot \
   -k /Library/Keychains/System.keychain \
-  ~/.config/ai-distillation/ca.pem
+  ~/.config/weight-distillation/ca.pem
 ```
 
 **Linux (Ubuntu / Debian):**
 ```bash
-sudo cp ~/.config/ai-distillation/ca.pem \
-  /usr/local/share/ca-certificates/ai-distillation.crt
+sudo cp ~/.config/weight-distillation/ca.pem \
+  /usr/local/share/ca-certificates/weight-distillation.crt
 sudo update-ca-certificates
 ```
 
 **Firefox:**
 1. Open Firefox → Settings → Privacy & Security → Certificates → View Certificates
 2. Click **Authorities** → **Import**
-3. Select `~/.config/ai-distillation/ca.pem`
+3. Select `~/.config/weight-distillation/ca.pem`
 4. Trust it for websites, then restart Firefox
 
 > **Note:** Chrome and Edge on macOS use the system Keychain, so the macOS command above covers them. Firefox manages its own certificate store — use the Firefox steps above.
@@ -172,7 +172,7 @@ bun run src/cli.ts [options]
 |---|---|---|
 | `--port` | `8080` | Port the proxy listens on |
 | `--host` | `127.0.0.1` | Host the proxy binds to |
-| `--log-file <path>` | `~/.config/ai-distillation/traffic.jsonl` | Where to save the distillate log |
+| `--log-file <path>` | `~/.config/weight-distillation/traffic.jsonl` | Where to save the distillate log |
 | `--max-body-bytes <n>` | `1048576` | Max body size to capture (default: 1 MB) |
 | `--capture-all` | — | Capture bodies for media/image/font types (default: skipped) |
 | `--no-tui` | — | Run without the dashboard (logging only) |
@@ -184,7 +184,7 @@ bun run src/cli.ts [options]
 When you run without `--no-tui`, a terminal dashboard appears:
 
 ```
-┌─ ai-distillation ─────────────── 127.0.0.1:8080 ─ 200 calls ──┐
+┌─ weight-distillation ─────────────── 127.0.0.1:8080 ─ 200 calls ──┐
 │ ▶ Requests                  Errors (0)   Latency p50: 45ms       │
 ├──────────────────────────────────────────────────────────────────┤
 │ POST /v1/chat/completions   200   320ms                           │
@@ -211,7 +211,7 @@ When you run without `--no-tui`, a terminal dashboard appears:
 
 ## Distillate Log File
 
-Every request and response is appended to the log file (`~/.config/ai-distillation/traffic.jsonl` by default). Each line is a single JSON object — one record per HTTP transaction.
+Every request and response is appended to the log file (`~/.config/weight-distillation/traffic.jsonl` by default). Each line is a single JSON object — one record per HTTP transaction.
 
 The log survives app restarts and is useful for:
 - **Prompt engineering** — replay real API calls to refine prompts
@@ -246,11 +246,11 @@ Example log entry:
 
 This tool is for **local use on your own machine only**.
 
-The CA private key stored at `~/.config/ai-distillation/ca-key.pem` is a sensitive secret. Anyone who has access to it can perform MITM attacks on your HTTPS traffic. Treat it accordingly:
+The CA private key stored at `~/.config/weight-distillation/ca-key.pem` is a sensitive secret. Anyone who has access to it can perform MITM attacks on your HTTPS traffic. Treat it accordingly:
 
 - Keep the file permissions restricted (`0600`) — the tool sets this automatically
 - Do not share the key or commit it to version control
-- Delete the CA files (`~/.config/ai-distillation/`) if you no longer need the tool
+- Delete the CA files (`~/.config/weight-distillation/`) if you no longer need the tool
 
 ---
 
